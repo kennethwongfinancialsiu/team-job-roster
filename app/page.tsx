@@ -85,31 +85,39 @@ export default function RosterPage() {
       `${year}-${mm}-${String(i + 1).padStart(2, '0')}`
     )
 
-    // Per-job rotation queue: each job keeps its own ordered list of maker IDs.
-    // We find the first available (not on leave) maker in the queue, assign them,
-    // then move them to the back — ensuring the most-recently-used maker waits longest.
-    const queues: Record<string, string[]> = {}
-    activeJobs.forEach((j) => {
-      queues[j.id] = activeMakers.map((m) => m.id)
+    // Track total assignments per maker across the whole month (existing + new).
+    // This is used to prioritise the least-loaded maker each day, keeping
+    // the monthly workload balanced even when some makers are on leave.
+    const makerLoad: Record<string, number> = {}
+    activeMakers.forEach((m) => { makerLoad[m.id] = 0 })
+    assignments.forEach((a) => {
+      if (makerLoad[a.maker_id] !== undefined) makerLoad[a.maker_id]++
     })
 
     const newRows: Array<{ date: string; job_id: string; maker_id: string }> = []
 
     for (const date of dates) {
-      for (const job of activeJobs) {
-        if (existing.has(`${date}:${job.id}`)) continue // already assigned — skip
+      // 1. Get makers available this day (not on leave), sorted by least load first.
+      //    Tie-break by name for deterministic ordering.
+      const available = activeMakers
+        .filter((m) => !isOnLeave(m.id, date, leaves))
+        .sort((a, b) => makerLoad[a.id] - makerLoad[b.id] || a.name.localeCompare(b.name))
 
-        const queue = queues[job.id]
-        // Find the first maker in the queue who is available that day
-        const availIdx = queue.findIndex((id) => !isOnLeave(id, date, leaves))
-        if (availIdx === -1) continue // everyone on leave — leave cell empty
+      if (available.length === 0) continue
 
-        const makerId = queue[availIdx]
-        // Rotate: move this maker to the back so others get turns
-        queue.splice(availIdx, 1)
-        queue.push(makerId)
+      // 2. Get jobs that still need an assignment today
+      const unassigned = activeJobs.filter((j) => !existing.has(`${date}:${j.id}`))
 
-        newRows.push({ date, job_id: job.id, maker_id: makerId })
+      // 3. Assign jobs to makers.
+      //    First pass: 1 job per maker (ideal case — no maker does 2 jobs if avoidable).
+      //    If jobs > makers, cycle back for a second pass (overflow only).
+      for (let i = 0; i < unassigned.length; i++) {
+        const maker = available[i % available.length]
+        const job = unassigned[i]
+
+        newRows.push({ date, job_id: job.id, maker_id: maker.id })
+        existing.add(`${date}:${job.id}`)
+        makerLoad[maker.id]++
       }
     }
 
