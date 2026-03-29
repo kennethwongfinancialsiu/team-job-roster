@@ -44,3 +44,14 @@ export async function upsertAssignment(
     )
   if (error) throw error
 }
+
+/** Insert multiple assignments at once (used by auto-populate). Skips conflicts. */
+export async function bulkUpsertAssignments(
+  rows: Array<{ date: string; job_id: string; maker_id: string }>
+): Promise<void> {
+  if (rows.length === 0) return
+  const { error } = await supabase
+    .from('roster_assignments')
+    .upsert(rows, { onConflict: 'date,job_id' })
+  if (error) throw error
+}
